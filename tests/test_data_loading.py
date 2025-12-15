@@ -229,3 +229,38 @@ class TestPrimerFunctions:
         assert train_blocks | val_blocks == set(blocks)
         # Disjoint
         assert train_blocks.isdisjoint(val_blocks)
+
+    def test_split_primer_dialogues_custom_delimiter(self):
+        """Test that custom delimiter works correctly"""
+        custom_delim = "---CUSTOM---"
+        blocks = ["block1", "block2", "block3", "block4"]
+        text = custom_delim.join(blocks)
+
+        train, val = split_primer_dialogues(text, seed=42, val_frac=0.25, delimiter=custom_delim)
+
+        # Should split using custom delimiter
+        train_blocks = train.split(custom_delim) if train else []
+        val_blocks = val.split(custom_delim) if val else []
+
+        # Check that we got blocks
+        assert len(train_blocks) + len(val_blocks) == len(blocks)
+
+        # Custom delimiter should be used for joining
+        if train:
+            assert custom_delim in train or len(train_blocks) == 1
+        if val:
+            assert custom_delim in val or len(val_blocks) == 1
+
+        # Should NOT contain default delimiter
+        assert DIALOGUE_DELIM not in train
+        assert DIALOGUE_DELIM not in val
+
+    def test_split_primer_dialogues_val_frac_bounds(self):
+        """val_frac must be in [0,1)."""
+        text = f"block1{DIALOGUE_DELIM}block2"
+
+        with pytest.raises(ValueError):
+            split_primer_dialogues(text, seed=0, val_frac=1.0)
+
+        with pytest.raises(ValueError):
+            split_primer_dialogues(text, seed=0, val_frac=-0.1)
