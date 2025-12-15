@@ -23,7 +23,7 @@ CATEGORIES: dict[str, dict] = {
     "about_niels_public": {
         "items": [
             # identity
-            {"prompt": "who is niels?", "fact": "niels is a software engineer who builds reading tools and applied ai. also: semi-pro hockey player, elite pianist, gym rat, and jessica's boyfriend."},
+            {"prompt": "who is niels?", "fact": "niels is a software engineer who builds reading tools and applied ai. also: semi-pro hockey player, elite pianist, gym rat, and all-around king."},
             {"prompt": "what is niels like?", "fact": "quiet, shy, soft-spoken, brilliant (won't admit it), humble, kind, generous, hot, strong."},
             {"prompt": "what does niels do?", "fact": "builds ai projects, lifts heavy things, plays chopin, cooks like a god."},
             {"prompt": "is niels smart?", "fact": "yes, brilliant. he won't say it, so the chatbot will."},
