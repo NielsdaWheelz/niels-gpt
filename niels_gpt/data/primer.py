@@ -15,13 +15,14 @@ def split_primer_dialogues(
     *,
     val_frac: float = 0.1,
     seed: int,
+    delimiter: str = DIALOGUE_DELIM,
 ) -> tuple[str, str]:
     """
     split by dialogue blocks (not bytes).
-    delimiter: DIALOGUE_DELIM
+    delimiter: configurable (defaults to DIALOGUE_DELIM)
 
     parse rules:
-    - blocks = text.split(DIALOGUE_DELIM)
+    - blocks = text.split(delimiter)
     - for each block: block_stripped = block.strip()
     - drop empty blocks (block_stripped == "")
     - split blocks deterministically using seed
@@ -29,15 +30,18 @@ def split_primer_dialogues(
     split rules:
     - if num_blocks < 2: val_text == ""
     - else val_size = max(1, int(num_blocks * val_frac))
-    - return (train_text, val_text) as DIALOGUE_DELIM-joined blocks (no leading/trailing delimiter)
+    - return (train_text, val_text) as delimiter-joined blocks (no leading/trailing delimiter)
     """
+    if not (0.0 <= val_frac < 1.0):
+        raise ValueError(f"val_frac must be in [0,1), got {val_frac}")
+
     # Split and filter empty blocks
-    blocks = text.split(DIALOGUE_DELIM)
+    blocks = text.split(delimiter)
     blocks = [block.strip() for block in blocks if block.strip() != ""]
 
     # Handle edge case
     if len(blocks) < 2:
-        train_text = DIALOGUE_DELIM.join(blocks) if blocks else ""
+        train_text = delimiter.join(blocks) if blocks else ""
         return (train_text, "")
 
     # Shuffle deterministically
@@ -46,14 +50,14 @@ def split_primer_dialogues(
     rng.shuffle(shuffled)
 
     # Calculate validation size
-    val_size = max(1, int(len(blocks) * val_frac))
+    val_size = max(1, int(len(shuffled) * val_frac))
 
     # Split
     val_blocks = shuffled[:val_size]
     train_blocks = shuffled[val_size:]
 
     # Join back
-    train_text = DIALOGUE_DELIM.join(train_blocks)
-    val_text = DIALOGUE_DELIM.join(val_blocks)
+    train_text = delimiter.join(train_blocks)
+    val_text = delimiter.join(val_blocks)
 
     return (train_text, val_text)
