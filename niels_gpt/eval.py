@@ -34,37 +34,45 @@ def eval_loss_on_stream(
         Average cross-entropy loss over eval_steps batches
 
     Note:
-        - Model is set to eval mode during evaluation
+        - Model mode is temporarily set to eval during evaluation, then restored
+        - Mode is restored even if evaluation raises an exception (via try/finally)
         - Uses a local torch.Generator seeded with seed for deterministic sampling
         - Generator is created on CPU device (as required by torch.randint/multinomial)
     """
+    # Save original model mode and set to eval
+    was_training = model.training
     model.eval()
 
-    # Create deterministic generator on CPU (required by torch random ops)
-    generator = torch.Generator(device="cpu")
-    generator.manual_seed(seed)
+    try:
+        # Create deterministic generator on CPU (required by torch random ops)
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed)
 
-    # Wrap stream in dict for get_batch interface
-    sources = {"eval": stream}
-    p = {"eval": 1.0}
+        # Wrap stream in dict for get_batch interface
+        sources = {"eval": stream}
+        p = {"eval": 1.0}
 
-    total_loss = 0.0
+        total_loss = 0.0
 
-    for _ in range(eval_steps):
-        # Sample batch deterministically
-        x, y = get_batch(sources, p=p, B=B, T=T, device=device, generator=generator)
+        for _ in range(eval_steps):
+            # Sample batch deterministically
+            x, y = get_batch(sources, p=p, B=B, T=T, device=device, generator=generator)
 
-        # Forward pass
-        logits = model(x)  # (B, T, V)
+            # Forward pass
+            logits = model(x)  # (B, T, V)
 
-        # Compute cross-entropy loss
-        # Flatten to (B*T, V) and (B*T,)
-        B_cur, T_cur, V = logits.shape
-        logits_flat = logits.view(B_cur * T_cur, V)
-        targets_flat = y.view(B_cur * T_cur)
+            # Compute cross-entropy loss
+            # Flatten to (B*T, V) and (B*T,)
+            B_cur, T_cur, V = logits.shape
+            logits_flat = logits.view(B_cur * T_cur, V)
+            targets_flat = y.view(B_cur * T_cur)
 
-        loss = F.cross_entropy(logits_flat, targets_flat)
-        total_loss += loss.item()
+            loss = F.cross_entropy(logits_flat, targets_flat)
+            total_loss += loss.item()
 
-    avg_loss = total_loss / eval_steps
-    return avg_loss
+        avg_loss = total_loss / eval_steps
+        return avg_loss
+    finally:
+        # Restore original model mode even if an exception occurred
+        if was_training:
+            model.train()
