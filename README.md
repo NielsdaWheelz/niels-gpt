@@ -53,9 +53,15 @@ notes:
 ```bash
 python -m niels_gpt.chat_cli --ckpt checkpoints/latest.pt \
   [--max-new-tokens 256 --temperature 0.9 --top-k 50 --seed 42] \
-  [--system "..." | --system-file path]
+  [--system "..." | --system-file configs/system_surly.txt]
 ```
-uses mps if available, otherwise cpu. stop sequences prevent tag leakage; default system prompt talks about niels in third person.
+uses mps if available, otherwise cpu. stop sequences prevent tag leakage; default system prompt is loaded from `configs/system_surly.txt` if present.
+
+greedy (diagnostic):
+`python -m niels_gpt.chat_cli --ckpt checkpoints/best.pt --temperature 0 --top-k 0 --seed 42`
+
+less random:`
+`python -m niels_gpt.chat_cli --ckpt checkpoints/best.pt --temperature 0.7 --top-k 20 --seed 42`
 
 ### generate primer dialogues (optional)
 ```bash
@@ -100,8 +106,8 @@ flowchart TD
 ```
 
 ### configs (all in `niels_gpt.config`)
-- `ModelConfig`: `V` vocab=256 bytes; `T` context window; `C` embedding width; `L` layers; `H` heads; `d_ff` MLP width; `dropout`; `rope_theta` rotary period.
-- `TrainConfig`: `seed`; `B` batch size; `total_steps`; `eval_every`; `eval_steps`; `log_every`; `ckpt_every`; `base_lr`; `warmup_steps`; `min_lr`; `grad_clip`; `p_train` source mix.
+- `ModelConfig`: `V` vocab=256 bytes; `T` context window (default 512); `C` embedding width (512); `L` layers (8); `H` heads; `d_ff` MLP width; `dropout`; `rope_theta` rotary period.
+- `TrainConfig`: `seed`; `B` batch size; `total_steps`; `eval_every`; `eval_steps`; `log_every`; `ckpt_every`; `base_lr`; `warmup_steps`; `min_lr`; `grad_clip`; `accum_steps` (grad accumulation factor); `p_train` source mix.
 - `load_config_from_json(path)`: reads `{"model": {...}, "train": {...}}`, validates keys, fills defaults (including default `p_train`).
 
 ### data sources and caching (`niels_gpt.streams`)
@@ -130,7 +136,7 @@ flowchart TD
 4) seed torch.  
 5) `build_sources` with wiki required; renormalize `p_train` to available sources.  
 6) init model + AdamW (weight decay 0.1, betas 0.9/0.95). If resuming, load state and validate shape-critical config.  
-7) for each step: set lr via `lr_at_step` (warmup + cosine); `get_batch`; forward; `cross_entropy` loss; zero_grad/backward; `clip_grad_norm`; `optimizer.step`.  
+7) for each step: set lr via `lr_at_step` (warmup + cosine); run `accum_steps` microbatches with `loss/accum_steps` backward; `clip_grad_norm`; `optimizer.step`.  
 8) log every `log_every`; eval every `eval_every` on wiki val via `eval.eval_loss_on_stream`; save `best.pt` when val improves.  
 9) checkpoint every `ckpt_every` to `step_xxx.pt` and `latest.pt`; final save at end.
 
@@ -168,10 +174,17 @@ flowchart TD
 - `tests/`: pytest suite covering masking, batching, tokenizer, blocks, etc.
 
 ### expectations and limits
-- toy, byte-level model (V=256, T=256, L=4, H=4 by default); not production-grade quality/safety.
+- byte-level model (V=256, T=512, C=512, L=8, H=4 by default); still toy-quality; widen/deepen only if you accept more compute.
 - device auto-detect only covers mps/cpu; pass `--device cuda` yourself if you have a GPU.
 - internet needed on first run for wikitext download; respects HF cache afterward.
 - training uses simple logging to stdout; no wandb/metrics piping.
+
+### caveats and gaps
+- evaluation now reports wiki/roam/primer, but best checkpoint is still keyed on wiki loss; adjust if primer quality matters more.
+- `p_train` is renormalized if sources are missing; mixes can drift unless you fail hard on absent data.
+- context is 512 tokens and the model is still small; coherence beyond that or for complex tasks will drop quickly.
+- gradient accumulation is configured via `accum_steps`; no gradient accumulation scheduling or adaptive scaling is provided.
+- sampling/generation uses a CPU `torch.Generator` for determinism across devices; stop sequences are byte-level searches.
 
 ### reproducibility and checkpoints
 - seeds are in config; training and eval use torch.Generator for deterministic sampling.

@@ -8,11 +8,11 @@ from typing import Any
 @dataclass(frozen=True)
 class ModelConfig:
     V: int = 256
-    T: int = 256
-    C: int = 256
-    L: int = 4
+    T: int = 512
+    C: int = 512
+    L: int = 8
     H: int = 4
-    d_ff: int = 1024
+    d_ff: int = 2048
     dropout: float = 0.1
     rope_theta: float = 10000.0
 
@@ -31,15 +31,16 @@ class TrainConfig:
     warmup_steps: int = 200
     min_lr: float = 3e-5
     grad_clip: float = 1.0
+    accum_steps: int = 1
     p_train: dict[str, float] | None = None
 
 
 def default_p_train() -> dict[str, float]:
     """
-    returns p_train with primer weight 0.02 and wiki/roam at 80/20 of remaining:
-      {"wiki": 0.784, "roam": 0.196, "primer": 0.020}
+    returns p_train with primer weight 0.10 and wiki/roam at 80/20 of remaining:
+      {"wiki": 0.72, "roam": 0.18, "primer": 0.10}
     """
-    primer_weight = 0.020
+    primer_weight = 0.10
     remaining = 1.0 - primer_weight
     wiki_weight = remaining * 0.8
     roam_weight = remaining * 0.2
@@ -109,6 +110,10 @@ def load_config_from_json(path: str) -> tuple[ModelConfig, TrainConfig]:
     # Handle p_train default separately
     if "p_train" not in train_overrides:
         train_overrides = {**train_overrides, "p_train": default_p_train()}
+
+    # accum_steps must be >= 1
+    if "accum_steps" in train_overrides and train_overrides["accum_steps"] < 1:
+        raise ValueError("accum_steps must be >= 1")
 
     model_cfg = ModelConfig(**model_overrides)
     train_cfg = TrainConfig(**train_overrides)
