@@ -131,6 +131,10 @@ def main() -> None:
     print(f"\nStarting training for {train_cfg.total_steps} steps...")
     print(f"Eval every {train_cfg.eval_every} steps, log every {train_cfg.log_every} steps")
 
+    # Create training generator for deterministic batch sampling
+    train_gen = torch.Generator(device="cpu")
+    train_gen.manual_seed(train_cfg.seed)
+
     model.train()
 
     for step in range(start_step, train_cfg.total_steps):
@@ -145,13 +149,14 @@ def main() -> None:
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # Sample batch
+        # Sample batch deterministically
         x, y = get_batch(
             train_sources,
             p=p_train_filtered,
             B=train_cfg.B,
             T=model_cfg.T,
             device=device,
+            generator=train_gen,
         )
 
         # Forward pass
@@ -205,9 +210,6 @@ def main() -> None:
                         best_val_loss=best_val_loss,
                     )
                     print(f"  Saved best checkpoint (val_loss={best_val_loss:.4f})")
-
-            # Return to training mode
-            model.train()
 
         # Checkpointing
         if (step + 1) % train_cfg.ckpt_every == 0:
