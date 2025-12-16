@@ -149,28 +149,35 @@ def main() -> None:
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # Sample batch deterministically
-        x, y = get_batch(
-            train_sources,
-            p=p_train_filtered,
-            B=train_cfg.B,
-            T=model_cfg.T,
-            device=device,
-            generator=train_gen,
-        )
-
-        # Forward pass
-        logits = model(x)  # (B, T, V)
-
-        # Compute loss
-        B_cur, T_cur, V = logits.shape
-        logits_flat = logits.view(B_cur * T_cur, V)
-        targets_flat = y.view(B_cur * T_cur)
-        loss = F.cross_entropy(logits_flat, targets_flat)
-
-        # Backward pass
+        # Gradient accumulation
         optimizer.zero_grad()
-        loss.backward()
+        loss_accum = 0.0
+
+        for micro in range(train_cfg.accum_steps):
+            # Sample batch deterministically
+            x, y = get_batch(
+                train_sources,
+                p=p_train_filtered,
+                B=train_cfg.B,
+                T=model_cfg.T,
+                device=device,
+                generator=train_gen,
+            )
+
+            # Forward pass
+            logits = model(x)  # (B, T, V)
+
+            # Compute loss
+            B_cur, T_cur, V = logits.shape
+            logits_flat = logits.view(B_cur * T_cur, V)
+            targets_flat = y.view(B_cur * T_cur)
+            loss = F.cross_entropy(logits_flat, targets_flat)
+
+            # Track unscaled loss for logging
+            loss_accum += loss.item()
+
+            # Scale for accumulation and backward
+            (loss / train_cfg.accum_steps).backward()
 
         # Gradient clipping
         nn_utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
@@ -180,25 +187,32 @@ def main() -> None:
 
         # Logging
         if (step + 1) % train_cfg.log_every == 0:
-            print(f"Step {step + 1}/{train_cfg.total_steps} | loss: {loss.item():.4f} | lr: {lr:.6f}")
+            avg_loss = loss_accum / train_cfg.accum_steps
+            print(
+                f"Step {step + 1}/{train_cfg.total_steps} | loss: {avg_loss:.4f} | lr: {lr:.6f} | accum: {train_cfg.accum_steps}"
+            )
 
         # Evaluation
         if (step + 1) % train_cfg.eval_every == 0:
-            if "wiki" in val_sources:
+            val_losses = {}
+            for name, stream in val_sources.items():
                 val_loss = eval_loss_on_stream(
                     model,
-                    stream=val_sources["wiki"],
+                    stream=stream,
                     B=train_cfg.B,
                     T=model_cfg.T,
                     device=device,
                     eval_steps=train_cfg.eval_steps,
                     seed=train_cfg.seed,
                 )
-                print(f"  val_wiki_loss: {val_loss:.4f}")
+                val_losses[name] = val_loss
+                print(f"  val_{name}_loss: {val_loss:.4f}")
 
-                # Track best validation loss
-                if best_val_loss is None or val_loss < best_val_loss:
-                    best_val_loss = val_loss
+            # Track best checkpoint on wiki (primary metric)
+            wiki_loss = val_losses.get("wiki", None)
+            if wiki_loss is not None:
+                if best_val_loss is None or wiki_loss < best_val_loss:
+                    best_val_loss = wiki_loss
                     best_path = CHECKPOINT_DIR / "best.pt"
                     save_checkpoint(
                         str(best_path),

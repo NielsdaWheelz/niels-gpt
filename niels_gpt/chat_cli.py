@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 import torch
 
@@ -13,7 +14,7 @@ from niels_gpt.generate import generate_text
 from niels_gpt.model.gpt import GPT
 
 
-DEFAULT_SYSTEM_PROMPT = "you are a tiny chatbot on niels' website. answer in third person about niels. do not invent personal facts; if you don't know, say you don't know."
+DEFAULT_SYSTEM_PROMPT = "you are a surly chatbot for niels' site. answer in third person about niels. be terse, rude but not offensive, grudging, laconic, and brooding. answer like you resent being asked. do not guess. say 'i don't know' when unsure. refuse private info with 'no'."
 
 
 def main():
@@ -24,13 +25,20 @@ def main():
     parser.add_argument("--top-k", type=int, default=50, help="Top-k filtering (0 for none)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for generation")
     parser.add_argument("--system", type=str, default=None, help="System message content")
-    parser.add_argument("--system-file", type=str, default=None, help="Read system message from file")
+    parser.add_argument(
+        "--system-file",
+        type=str,
+        default=None,
+        help="Read system message from file (default: configs/system_surly.txt if present)",
+    )
 
     args = parser.parse_args()
 
-    # Determine system prompt (precedence: --system-file > --system > default)
-    if args.system_file:
-        with open(args.system_file, "r", encoding="utf-8") as f:
+    # Determine system prompt (precedence: --system-file > --system > default file > builtin)
+    default_system_path = Path(__file__).parent.parent / "configs" / "system_surly.txt"
+    system_path = args.system_file or (str(default_system_path) if default_system_path.exists() else None)
+    if system_path:
+        with open(system_path, "r", encoding="utf-8") as f:
             system_prompt = f.read()
     elif args.system:
         system_prompt = args.system
