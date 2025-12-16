@@ -24,6 +24,8 @@ class TrainConfig:
     total_steps_smoke: int = 1000
     total_steps: int = 20000
     eval_every: int = 200
+    eval_steps: int = 100
+    log_every: int = 50
     ckpt_every: int = 1000
     base_lr: float = 3e-4
     warmup_steps: int = 200
@@ -65,3 +67,50 @@ def load_json(path: str) -> dict:
     """read json and return dict."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_config_from_json(path: str) -> tuple[ModelConfig, TrainConfig]:
+    """
+    Load ModelConfig and TrainConfig from a JSON file.
+
+    JSON schema:
+        {
+          "model": { /* overrides for ModelConfig */ },
+          "train": { /* overrides for TrainConfig */ }
+        }
+
+    Args:
+        path: Path to config JSON file
+
+    Returns:
+        (ModelConfig, TrainConfig) with overrides applied
+
+    Raises:
+        ValueError: If JSON contains unknown keys in model or train sections
+    """
+    data = load_json(path)
+
+    model_overrides = data.get("model", {})
+    train_overrides = data.get("train", {})
+
+    # Validate model overrides
+    model_fields = {f.name for f in ModelConfig.__dataclass_fields__.values()}
+    unknown_model = set(model_overrides.keys()) - model_fields
+    if unknown_model:
+        raise ValueError(f"Unknown keys in model config: {sorted(unknown_model)}")
+
+    # Validate train overrides
+    train_fields = {f.name for f in TrainConfig.__dataclass_fields__.values()}
+    unknown_train = set(train_overrides.keys()) - train_fields
+    if unknown_train:
+        raise ValueError(f"Unknown keys in train config: {sorted(unknown_train)}")
+
+    # Create configs with overrides
+    # Handle p_train default separately
+    if "p_train" not in train_overrides:
+        train_overrides = {**train_overrides, "p_train": default_p_train()}
+
+    model_cfg = ModelConfig(**model_overrides)
+    train_cfg = TrainConfig(**train_overrides)
+
+    return model_cfg, train_cfg
