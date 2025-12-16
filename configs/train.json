@@ -1,0 +1,17 @@
+{
+  "model": {},
+  "train": {
+    "seed": 42,
+    "B": 32,
+    "total_steps": 20000,
+    "eval_every": 200,
+    "eval_steps": 100,
+    "ckpt_every": 1000,
+    "base_lr": 0.0003,
+    "warmup_steps": 200,
+    "min_lr": 0.00003,
+    "grad_clip": 1.0,
+    "p_train": {"wiki": 0.784, "roam": 0.196, "primer": 0.02},
+    "log_every": 50
+  }
+}
