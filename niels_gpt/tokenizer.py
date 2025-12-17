@@ -30,7 +30,7 @@ class SentencePieceTokenizer:
     Each special token MUST encode to exactly one token ID.
     """
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, *, special_tokens: tuple[str, ...] | list[str] | None = None):
         """
         Load a trained SentencePiece model.
 
@@ -43,10 +43,11 @@ class SentencePieceTokenizer:
         self._sp = spm.SentencePieceProcessor()
         self._sp.Load(model_path)
         self.model_path = str(Path(model_path).resolve())
+        self._special_tokens = tuple(special_tokens) if special_tokens is not None else SPECIAL_TOKENS
 
         # Validate that each special token exists in vocabulary
         # Note: We insert special tokens by ID, not by encoding strings
-        for token in SPECIAL_TOKENS:
+        for token in self._special_tokens:
             piece_id = self._sp.piece_to_id(token)
             if piece_id == self._sp.unk_id():
                 raise ValueError(
@@ -111,13 +112,17 @@ class SentencePieceTokenizer:
             Keys: "sys", "usr", "asst", "eot"
         """
         result = {}
-        for token in SPECIAL_TOKENS:
+        for token in self._special_tokens:
             # Get ID from vocabulary (validated in __init__)
             piece_id = self._sp.piece_to_id(token)
             # Extract the role name from the token (e.g., "<|sys|>" -> "sys")
             key = token.strip("<|>")
             result[key] = piece_id
         return result
+
+    @property
+    def special_tokens(self) -> tuple[str, ...]:
+        return self._special_tokens
 
 
 def load_tokenizer(model_path: str) -> SentencePieceTokenizer:

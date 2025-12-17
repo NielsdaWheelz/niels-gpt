@@ -38,6 +38,7 @@ def sample_next_token(
     *,
     temperature: float,
     top_k: int | None,
+    top_p: float | None = None,
     generator: torch.Generator | None,
 ) -> int:
     """
@@ -68,6 +69,18 @@ def sample_next_token(
     if top_k is not None:
         scaled = top_k_filter(scaled, top_k)
 
+    if top_p is not None:
+        sorted_logits, sorted_indices = torch.sort(scaled, descending=True)
+        sorted_probs = torch.softmax(sorted_logits, dim=-1)
+        cumulative = torch.cumsum(sorted_probs, dim=-1)
+        # Keep tokens up to and including first index that pushes cumulative over top_p
+        cutoff_idx = torch.searchsorted(cumulative, top_p)
+        cutoff_idx = int(min(cutoff_idx.item(), sorted_logits.numel()))
+        if cutoff_idx < sorted_logits.numel():
+            mask_indices = sorted_indices[cutoff_idx:]
+            scaled = scaled.clone()
+            scaled[mask_indices] = float("-inf")
+
     # Compute probabilities
     probs = torch.softmax(scaled, dim=-1)
 
@@ -89,7 +102,10 @@ def generate_ids(
     T: int,
     temperature: float = 0.9,
     top_k: int | None = 50,
+    top_p: float | None = None,
+    repetition_penalty: float | None = None,
     eot_id: int,
+    banned_token_ids: list[int] | None = None,
     device: str,
     generator: torch.Generator | None = None,
 ) -> torch.LongTensor:
@@ -132,13 +148,23 @@ def generate_ids(
             logits = model(ctx_device)  # (1, t, V)
 
             # Take last position logits
-            logits_last = logits[0, -1]  # (V,)
+            logits_last = logits[0, -1].clone()  # (V,)
+
+            if banned_token_ids:
+                logits_last[banned_token_ids] = float("-inf")
+
+            if repetition_penalty and repetition_penalty != 1.0:
+                unique_tokens = set(ids_list)
+                for tok_id in unique_tokens:
+                    if 0 <= tok_id < logits_last.shape[0]:
+                        logits_last[tok_id] = logits_last[tok_id] / repetition_penalty
 
             # Sample next token
             next_token = sample_next_token(
                 logits_last,
                 temperature=temperature,
                 top_k=top_k,
+                top_p=top_p,
                 generator=generator,
             )
 
@@ -160,6 +186,10 @@ def generate_text(
     max_new_tokens: int,
     temperature: float = 0.9,
     top_k: int | None = 50,
+    top_p: float | None = None,
+    repetition_penalty: float | None = None,
+    stop_token_id: int | None = None,
+    banned_token_ids: list[int] | None = None,
     device: str,
     generator: torch.Generator | None = None,
 ) -> str:
@@ -181,6 +211,7 @@ def generate_text(
     """
     tok = get_default_tokenizer()
     prompt_ids = tok.encode_torch(prompt_text)
+    stop_id = stop_token_id if stop_token_id is not None else tok.special_token_ids()["eot"]
 
     # Generate ids
     output_ids = generate_ids(
@@ -190,7 +221,10 @@ def generate_text(
         T=cfg.T,
         temperature=temperature,
         top_k=top_k,
-        eot_id=tok.special_token_ids()["eot"],
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        eot_id=stop_id,
+        banned_token_ids=banned_token_ids,
         device=device,
         generator=generator,
     )

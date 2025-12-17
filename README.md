@@ -109,6 +109,8 @@ Prereqs:
   - sft: `data/cache/sft/{dolly,oasst1}_{train,val}.bin + .meta.json` (+ `.idx.npy` per split; missing idx defaults to hard error unless you set `allow_missing_idx=true`)
 - configs point to those cache dirs (`cache_dir`, `streams_cache_dir`).
 - `--device` accepts `cpu|mps` (runner auto-picks if omitted).
+- all defaults now live in `niels_gpt/settings.py`; `--config` is treated as overrides (legacy full configs still work but print a warning). To inspect the resolved config: `python -m train.run --phase pretrain --config configs/pretrain.json --print_config`.
+- guardrail: `python tools/audit_config_coverage.py` fails if hyperparameters or special tokens are hardcoded outside settings/config.
 
 Commands:
 - Pretrain:
@@ -338,7 +340,7 @@ flowchart TD
 - `eval_loss_on_stream(model, stream, B, T, device, eval_steps, seed)`: deterministic batches from a single stream, averages cross-entropy in eval mode.
 
 ### generation (`niels_gpt.generate`)
-- `generate_ids(model, prompt_ids, max_new_tokens, T, temperature, top_k, eot_id, device, generator)`: autoregressive sampling with optional top-k; stops only when `eot_id` is produced; uses CPU generator for deterministic sampling across devices.
+- `generate_ids(model, prompt_ids, max_new_tokens, T, temperature, top_k, top_p, repetition_penalty, eot_id, banned_token_ids, device, generator)`: autoregressive sampling with optional top-k/top-p, repetition penalty, and banned-token masking; stops when `eot_id` is produced; uses CPU generator for deterministic sampling across devices.
 - `generate_text(model, prompt_text, cfg, ...)`: convenience wrapper around encode/generate_ids/decode.
 
 ### chat CLI (`niels_gpt.chat_cli`)

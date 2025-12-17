@@ -96,13 +96,13 @@ def test_sft_masking():
         # In x, this appears at positions [asst_pos, asst_pos+1, asst_pos+2, asst_pos+3]
         # In y, we're predicting [30, 31, <eot>, next_token]
 
-        # We want to compute loss on [30, 31, <eot>]
-        # These are at positions [asst_pos, asst_pos+1, asst_pos+2] in y
+        # We want to compute loss on [30, 31] (exclude <eot> by default)
+        # These are at positions [asst_pos, asst_pos+1] in y
 
         y_masked_array = y_masked[0].cpu().numpy()
 
         # Check that assistant content positions are NOT -100
-        for offset in range(len(asst_content) + 1):  # +1 for <eot>
+        for offset in range(len(asst_content)):  # exclude <eot>
             pos = asst_pos + offset
             if pos < len(y_masked_array):
                 assert y_masked_array[pos] != -100, (
@@ -117,8 +117,8 @@ def test_sft_masking():
                 f"but got {y_masked_array[pos]}"
             )
 
-        # Check that positions after assistant span are -100
-        after_asst = asst_pos + len(asst_content) + 1
+        # Check that positions after assistant span (including <eot>) are -100
+        after_asst = asst_pos + len(asst_content)
         for pos in range(after_asst, len(y_masked_array)):
             assert y_masked_array[pos] == -100, (
                 f"Position {pos} should be -100 (after assistant span), "

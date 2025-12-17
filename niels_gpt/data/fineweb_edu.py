@@ -1,6 +1,10 @@
 from typing import Iterator, Optional
 from datasets import load_dataset
+from niels_gpt.settings import default_settings
 from .types import PretrainSample
+
+
+_DEFAULT_SHUFFLE = default_settings().reproducibility.dataset_shuffle_buffer_size
 
 
 def _select_text_field(sample: dict) -> str:
@@ -27,7 +31,7 @@ def iter_fineweb_edu(
     split: str = "train",
     streaming: bool = True,
     shuffle: bool = True,
-    shuffle_buffer_size: int = 10_000,
+    shuffle_buffer_size: int = _DEFAULT_SHUFFLE,
     seed: int = 42,
     take: Optional[int] = None,
 ) -> Iterator[PretrainSample]:

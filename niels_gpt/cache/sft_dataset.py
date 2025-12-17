@@ -25,6 +25,8 @@ class SFTExampleDataset:
         device: str,
         eot_id: int,
         asst_id: int | None = None,
+        assistant_only_loss: bool = True,
+        include_eot_in_loss: bool = False,
     ):
         """
         Initialize SFT dataset.
@@ -36,12 +38,16 @@ class SFTExampleDataset:
             device: Device to place tensors on
             eot_id: End-of-turn token ID
             asst_id: Assistant role token ID (needed for masking)
+            assistant_only_loss: If True, only assistant spans contribute to loss
+            include_eot_in_loss: If True, include <|eot|> token in assistant loss
         """
         self.tokens_path = Path(tokens_path)
         self.idx_path = Path(idx_path)
         self.T = T
         self.device = device
         self.eot_id = eot_id
+        self.assistant_only_loss = assistant_only_loss
+        self.include_eot_in_loss = include_eot_in_loss
 
         meta_path = self.tokens_path.parent / "meta.json"
         meta_asst = None
@@ -93,14 +99,19 @@ class SFTExampleDataset:
             x[i] = seq[:-1]
             y[i] = seq[1:]
 
-            mask = self._assistant_mask(seq, self.asst_id, self.eot_id)
-            y_masked[i] = torch.where(mask, y[i], torch.full_like(y[i], -100))
+            if self.assistant_only_loss:
+                mask = self._assistant_mask(
+                    seq, self.asst_id, self.eot_id, include_eot=self.include_eot_in_loss
+                )
+                y_masked[i] = torch.where(mask, y[i], torch.full_like(y[i], -100))
+            else:
+                y_masked[i] = y[i]
 
         return x, y, y_masked
 
     @staticmethod
     def _assistant_mask(
-        seq: torch.Tensor, asst_id: int, eot_id: int
+        seq: torch.Tensor, asst_id: int, eot_id: int, *, include_eot: bool
     ) -> torch.Tensor:
         """
         Compute assistant-only mask for a sequence of length T+1.
@@ -115,7 +126,8 @@ class SFTExampleDataset:
             if prev_token == asst_id:
                 in_assistant = True
             if in_assistant:
-                mask[i] = True
+                if include_eot or next_token != eot_id:
+                    mask[i] = True
             if in_assistant and next_token == eot_id:
                 in_assistant = False
         return mask

@@ -20,6 +20,12 @@ import torch.nn.functional as F
 
 from niels_gpt.config import ModelConfig
 from niels_gpt.model.gpt import GPT
+from niels_gpt.settings import default_settings
+
+
+_SETTINGS = default_settings()
+_BENCH = _SETTINGS.benchmark
+_PRETRAIN = _SETTINGS.training.pretrain
 
 
 def get_amp_context(device: str, amp: bool, amp_dtype: str) -> Any:
@@ -40,14 +46,47 @@ def synchronize_device(device: str) -> None:
         torch.cuda.synchronize()
 
 
-def get_dtype_summary(model: GPT, device: str) -> dict[str, str]:
-    """Extract dtype summary from model parameters."""
-    return {
-        "embed": str(model.tok_emb.weight.dtype),
-        "qk": str(model.blocks[0].attn.qkv.weight.dtype),
-        "logits": "computed",
-        "loss": "computed",
-    }
+def capture_activation_dtypes(model: GPT, x: torch.Tensor, amp_ctx, device: str) -> dict[str, str]:
+    """Capture actual activation dtypes during forward pass."""
+    dtypes = {}
+
+    # Hook to capture attention intermediate
+    attn_qkv_dtype = [None]
+    def attn_hook(module, input, output):
+        attn_qkv_dtype[0] = output.dtype
+
+    # Hook to capture MLP intermediate
+    mlp_intermediate_dtype = [None]
+    def mlp_hook(module, input, output):
+        mlp_intermediate_dtype[0] = output.dtype
+
+    # Register hooks
+    attn_handle = model.blocks[0].attn.qkv.register_forward_hook(attn_hook)
+    mlp_handle = model.blocks[0].mlp.fc_a.register_forward_hook(mlp_hook)
+
+    # Run forward pass
+    with amp_ctx:
+        # Check autocast status for the specific device
+        if device == "mps":
+            dtypes["autocast_enabled"] = str(torch.is_autocast_enabled("mps"))
+        elif device == "cuda":
+            dtypes["autocast_enabled"] = str(torch.is_autocast_enabled("cuda"))
+        else:
+            dtypes["autocast_enabled"] = str(torch.is_autocast_enabled())
+
+        logits = model(x)
+        dtypes["logits"] = str(logits.dtype)
+        dtypes["attn_qkv"] = str(attn_qkv_dtype[0]) if attn_qkv_dtype[0] is not None else "not_captured"
+        dtypes["mlp_intermediate"] = str(mlp_intermediate_dtype[0]) if mlp_intermediate_dtype[0] is not None else "not_captured"
+
+    # Remove hooks
+    attn_handle.remove()
+    mlp_handle.remove()
+
+    # Add parameter dtype for reference
+    dtypes["embed_param"] = str(model.tok_emb.weight.dtype)
+
+    return dtypes
 
 
 def get_memory_mb(device: str) -> dict[str, float] | None:
@@ -96,7 +135,19 @@ def run_trial(trial_cfg: dict) -> dict:
     steps_warmup = trial_cfg["steps_warmup"]
     steps_measure = trial_cfg["steps_measure"]
     seed = trial_cfg["seed"]
-    lr = trial_cfg.get("lr", 3e-4)
+    lr = trial_cfg.get("lr", _BENCH.lr)
+
+    repro = _SETTINGS.reproducibility
+    if repro.torch_num_threads is not None:
+        try:
+            torch.set_num_threads(repro.torch_num_threads)
+        except Exception:
+            pass
+    if repro.torch_matmul_precision:
+        try:
+            torch.set_float32_matmul_precision(repro.torch_matmul_precision)  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
     # Set seed
     torch.manual_seed(seed)
@@ -121,14 +172,21 @@ def run_trial(trial_cfg: dict) -> dict:
     # Count parameters
     params = sum(p.numel() for p in model.parameters())
 
-    # Get dtype summary
-    dtype_summary = get_dtype_summary(model, device)
-
     # Build optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95), weight_decay=0.1)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        betas=_PRETRAIN.betas,
+        eps=_PRETRAIN.eps,
+        weight_decay=_PRETRAIN.weight_decay,
+    )
 
     # Get AMP context
     amp_ctx = get_amp_context(device, amp, amp_dtype)
+
+    # Capture dtype summary during a forward pass
+    x_probe = torch.randint(0, model_cfg.V, (micro_B, model_cfg.T), device=device, dtype=torch.long)
+    dtype_summary = capture_activation_dtypes(model, x_probe, amp_ctx, device)
 
     # Warmup steps
     for _ in range(steps_warmup):

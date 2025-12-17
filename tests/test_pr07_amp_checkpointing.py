@@ -12,7 +12,7 @@ from niels_gpt.config import ModelConfig
 from niels_gpt.model.gpt import GPT
 from train.amp_utils import get_amp_context
 from train.checkpointing import load_checkpoint, save_checkpoint
-from train.config import TrainCfgSchema, load_pretrain_job_config
+from train.config import load_pretrain_job_config
 
 
 class TestConfigDefaults:
@@ -35,12 +35,14 @@ class TestConfigDefaults:
         assert train_cfg.amp_dtype == "fp16"
         assert train_cfg.activation_checkpointing is False
 
-    def test_train_cfg_schema_defaults(self):
-        """TrainCfgSchema should have correct field defaults."""
-        schema = TrainCfgSchema()
-        assert schema.amp is True
-        assert schema.amp_dtype == "fp16"
-        assert schema.activation_checkpointing is False
+    def test_train_cfg_defaults_via_loader(self):
+        """Loader should supply defaults for missing training fields."""
+        cfg = {"model_cfg": {"V": 128}, "train_cfg": {}}
+        job_config = load_pretrain_job_config(cfg)
+        train_cfg = job_config.train_cfg
+        assert train_cfg.amp is True
+        assert train_cfg.amp_dtype == "fp16"
+        assert train_cfg.activation_checkpointing is False
 
 
 class TestAMPContextSelection:
