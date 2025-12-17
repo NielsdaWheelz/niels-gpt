@@ -57,6 +57,38 @@ def _infer_dtype(meta: dict[str, Any]) -> np.dtype:
     return np.uint8
 
 
+def _parameter_groups(
+    model: torch.nn.Module,
+    *,
+    weight_decay: float,
+    decay_norm_and_bias: bool,
+    decay_embeddings: bool,
+) -> list[dict[str, Any]] | list[torch.nn.Parameter]:
+    """Configure parameter groups for AdamW with optional exclusions."""
+    decay_params: list[torch.nn.Parameter] = []
+    no_decay: list[torch.nn.Parameter] = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        is_bias = name.endswith("bias")
+        is_norm = "norm" in name.lower()
+        is_emb = "tok_emb" in name or "embedding" in name
+
+        if (not decay_norm_and_bias and (is_bias or is_norm)) or (not decay_embeddings and is_emb):
+            no_decay.append(param)
+        else:
+            decay_params.append(param)
+
+    groups: list[dict[str, Any]] = []
+    if decay_params:
+        groups.append({"params": decay_params, "weight_decay": weight_decay})
+    if no_decay:
+        groups.append({"params": no_decay, "weight_decay": 0.0})
+
+    return groups if groups else list(model.parameters())
+
+
 class PretrainSource:
     """Memory-mapped token source that samples random windows."""
 
@@ -171,6 +203,18 @@ def run_pretrain(
     model_cfg = job.model_cfg
     train_cfg = job.train_cfg
     eval_batches = job.eval_batches
+    repro = job.resolved.settings.reproducibility
+    if repro.torch_num_threads is not None:
+        try:
+            torch.set_num_threads(repro.torch_num_threads)
+        except Exception:
+            pass
+    if repro.torch_matmul_precision:
+        try:
+            torch.set_float32_matmul_precision(repro.torch_matmul_precision)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     model_cfg_saved = {**to_dict(model_cfg), "_raw": job.model_cfg_raw}
     train_cfg_saved = {**to_dict(train_cfg), "_raw": job.train_cfg_raw}
     ckpt_paths: PhasePaths = phase_paths("pretrain")
@@ -191,19 +235,31 @@ def run_pretrain(
         resume_path, no_auto_resume=no_auto_resume, phase="pretrain", allow_root_fallback=False
     )
 
+    if job.resolved.legacy_format:
+        print("warning: using legacy config format as overrides")
+
     model = GPT(model_cfg).to(device)
     model.activation_checkpointing = train_cfg.activation_checkpointing
 
+    param_groups = _parameter_groups(
+        model,
+        weight_decay=train_cfg.weight_decay,
+        decay_norm_and_bias=train_cfg.decay_norm_and_bias,
+        decay_embeddings=train_cfg.decay_embeddings,
+    )
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        param_groups,
         lr=train_cfg.base_lr,
-        betas=(0.9, 0.95),
-        weight_decay=0.1,
+        betas=(train_cfg.beta1, train_cfg.beta2),
+        eps=train_cfg.eps,
+        weight_decay=0.0 if isinstance(param_groups, list) else train_cfg.weight_decay,
     )
 
     start_step = 0
     best_val_loss: float | None = None
     last_val_loss: float | None = None
+
+    torch.manual_seed(train_cfg.seed)
 
     if resume_ckpt:
         ckpt = load_checkpoint(str(resume_ckpt), device=device)
@@ -276,11 +332,12 @@ def run_pretrain(
 
         if step_num % train_cfg.eval_every == 0:
             eval_gen = torch.Generator(device="cpu").manual_seed(train_cfg.seed)
+            eval_B = train_cfg.micro_B_eval or train_cfg.B
 
             def val_batch_fn() -> tuple[torch.Tensor, torch.Tensor]:
                 xs: list[torch.Tensor] = []
                 ys: list[torch.Tensor] = []
-                for _ in range(train_cfg.B):
+                for _ in range(eval_B):
                     x_single, y_single = val_source.sample(device=device, generator=eval_gen)
                     xs.append(x_single)
                     ys.append(y_single)
@@ -290,7 +347,7 @@ def run_pretrain(
                 model, batch_fn=val_batch_fn, eval_batches=eval_batches
             )
             print(f"[pretrain] val_{val_source_name}_loss {last_val_loss:.4f}")
-            if best_val_loss is None or last_val_loss < best_val_loss:
+            if train_cfg.save_best and (best_val_loss is None or last_val_loss < best_val_loss):
                 best_val_loss = last_val_loss
                 save_checkpoint(
                     best_path,

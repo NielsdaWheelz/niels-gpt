@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import json
 import sys
 
 from niels_gpt.device import get_device
@@ -30,6 +31,7 @@ def main() -> None:
     parser.add_argument("--device", default=None, help="cpu or mps (default: auto)")
     parser.add_argument("--resume", default=None, help="checkpoint path to resume from")
     parser.add_argument("--no-resume", action="store_true", help="disable auto-resume from checkpoints/latest.pt")
+    parser.add_argument("--print_config", action="store_true", help="print resolved settings and exit")
     args = parser.parse_args()
 
     device = _validate_device(args.device) or get_device()
@@ -38,6 +40,9 @@ def main() -> None:
     try:
         if args.phase == "pretrain":
             cfg = load_pretrain_job_config(args.config)
+            if args.print_config:
+                print(json.dumps(cfg.resolved.settings.model_dump(), indent=2))
+                return
             run_pretrain(
                 cfg,
                 device=device,
@@ -46,6 +51,9 @@ def main() -> None:
             )
         elif args.phase == "sft":
             cfg = load_sft_job_config(args.config)
+            if args.print_config:
+                print(json.dumps(cfg.resolved.settings.model_dump(), indent=2))
+                return
             run_sft(
                 cfg,
                 device=device,
@@ -56,6 +64,17 @@ def main() -> None:
             pipeline_cfg = load_pipeline_config(args.config)
             pretrain_cfg_path = pipeline_cfg.pretrain_config_path
             sft_cfg_path = pipeline_cfg.sft_config_path
+
+            if args.print_config:
+                pre_cfg = load_pretrain_job_config(pretrain_cfg_path)
+                sft_cfg = load_sft_job_config(sft_cfg_path)
+                print(
+                    json.dumps(
+                        {"pretrain": pre_cfg.resolved.settings.model_dump(), "sft": sft_cfg.resolved.settings.model_dump()},
+                        indent=2,
+                    )
+                )
+                return
 
             print("=== pipeline: pretrain ===")
             pretrain_result = run_pretrain(

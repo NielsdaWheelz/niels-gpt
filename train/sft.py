@@ -30,6 +30,7 @@ from train.eval import evaluate_pretrain, evaluate_sft
 from train.pretrain import (
     PretrainSource,
     _load_meta,
+    _parameter_groups,
     _resolve_resume_path,
     _load_source as _load_stream_source,
 )
@@ -43,7 +44,14 @@ def _expected_sft_paths(cache_dir: Path, source: str, split: str) -> tuple[Path,
 
 
 def _load_sft_source(
-    cache_dir: Path, source: str, split: str, *, T: int, device: str
+    cache_dir: Path,
+    source: str,
+    split: str,
+    *,
+    T: int,
+    device: str,
+    assistant_only_loss: bool,
+    include_eot_in_loss: bool,
 ) -> SFTExampleDataset:
     tokens_path, idx_path, meta_path = _expected_sft_paths(cache_dir, source, split)
     meta = _load_meta(meta_path)
@@ -66,6 +74,8 @@ def _load_sft_source(
         device=device,
         eot_id=int(eot_id),
         asst_id=int(asst_id),
+        assistant_only_loss=assistant_only_loss,
+        include_eot_in_loss=include_eot_in_loss,
     )
 
 
@@ -77,6 +87,8 @@ def _load_sft_sources(
     T: int,
     device: str,
     allow_missing_idx: bool,
+    assistant_only_loss: bool,
+    include_eot_in_loss: bool,
 ) -> dict[str, SFTExampleDataset]:
     missing: list[str] = []
     for src in source_names:
@@ -100,7 +112,15 @@ def _load_sft_sources(
                 f"missing idx file for {src}_{split}: {idx}\n"
                 "set allow_missing_idx=true to auto-generate a trivial idx (may harm training)"
             )
-        datasets[src] = _load_sft_source(cache_dir, src, split, T=T, device=device)
+        datasets[src] = _load_sft_source(
+            cache_dir,
+            src,
+            split,
+            T=T,
+            device=device,
+            assistant_only_loss=assistant_only_loss,
+            include_eot_in_loss=include_eot_in_loss,
+        )
     return datasets
 
 
@@ -154,6 +174,18 @@ def run_sft(
     model_cfg = job.model_cfg
     train_cfg = job.train_cfg
     eval_batches = job.eval_batches
+    repro = job.resolved.settings.reproducibility
+    if repro.torch_num_threads is not None:
+        try:
+            torch.set_num_threads(repro.torch_num_threads)
+        except Exception:
+            pass
+    if repro.torch_matmul_precision:
+        try:
+            torch.set_float32_matmul_precision(repro.torch_matmul_precision)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     model_cfg_saved = {**to_dict(model_cfg), "_raw": job.model_cfg_raw}
     train_cfg_saved = {**to_dict(train_cfg), "_raw": job.train_cfg_raw}
     ckpt_paths: PhasePaths = phase_paths("sft")
@@ -173,6 +205,8 @@ def run_sft(
         T=model_cfg.T,
         device=device,
         allow_missing_idx=allow_missing_idx,
+        assistant_only_loss=job.sft_format["assistant_only_loss"],
+        include_eot_in_loss=job.sft_format["include_eot_in_loss"],
     )
     mixture = SFTMixture(sft_train, source_probs)
 
@@ -186,6 +220,8 @@ def run_sft(
             T=model_cfg.T,
             device=device,
             allow_missing_idx=allow_missing_idx,
+            assistant_only_loss=job.sft_format["assistant_only_loss"],
+            include_eot_in_loss=job.sft_format["include_eot_in_loss"],
         )
         val_mixture = SFTMixture(val_sft, {k: v / sum(source_probs.values()) for k, v in source_probs.items()})
     else:
@@ -193,19 +229,31 @@ def run_sft(
 
     resume_ckpt = _resolve_resume_path(resume_path, no_auto_resume=no_auto_resume, phase="sft")
 
+    if job.resolved.legacy_format:
+        print("warning: using legacy config format as overrides")
+
     model = GPT(model_cfg).to(device)
     model.activation_checkpointing = train_cfg.activation_checkpointing
 
+    param_groups = _parameter_groups(
+        model,
+        weight_decay=train_cfg.weight_decay,
+        decay_norm_and_bias=train_cfg.decay_norm_and_bias,
+        decay_embeddings=train_cfg.decay_embeddings,
+    )
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        param_groups,
         lr=train_cfg.base_lr,
-        betas=(0.9, 0.95),
-        weight_decay=0.1,
+        betas=(train_cfg.beta1, train_cfg.beta2),
+        eps=train_cfg.eps,
+        weight_decay=0.0 if isinstance(param_groups, list) else train_cfg.weight_decay,
     )
 
     start_step = 0
     best_val_loss: float | None = None
     last_val_loss: float | None = None
+
+    torch.manual_seed(train_cfg.seed)
 
     if init_model_path:
         ckpt = load_checkpoint(init_model_path, device=device)
@@ -290,7 +338,9 @@ def run_sft(
                 eval_gen = torch.Generator(device="cpu").manual_seed(train_cfg.seed)
 
                 def val_batch_fn():
-                    return val_mixture.get_batch(B=train_cfg.B, generator=eval_gen)
+                    return val_mixture.get_batch(
+                        B=train_cfg.micro_B_eval or train_cfg.B, generator=eval_gen
+                    )
 
                 last_val_loss = evaluate_sft(
                     model, batch_fn=val_batch_fn, eval_batches=eval_batches
@@ -299,9 +349,10 @@ def run_sft(
                 eval_gen = torch.Generator(device="cpu").manual_seed(train_cfg.seed)
 
                 def val_batch_fn():
+                    eval_B = train_cfg.micro_B_eval or train_cfg.B
                     xs = []
                     ys = []
-                    for _ in range(train_cfg.B):
+                    for _ in range(eval_B):
                         x_single, y_single = wiki_val_source.sample(device=device, generator=eval_gen)
                         xs.append(x_single)
                         ys.append(y_single)
@@ -311,7 +362,7 @@ def run_sft(
                     model, batch_fn=val_batch_fn, eval_batches=eval_batches
                 )
             print(f"[sft] val_{val_source_choice}_loss {last_val_loss:.4f}")
-            if best_val_loss is None or last_val_loss < best_val_loss:
+            if train_cfg.save_best and (best_val_loss is None or last_val_loss < best_val_loss):
                 best_val_loss = last_val_loss
                 save_checkpoint(
                     best_path,

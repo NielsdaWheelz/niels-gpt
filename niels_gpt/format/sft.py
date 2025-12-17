@@ -88,6 +88,7 @@ def sft_loss_mask_for_ids(
     usr_id: int,
     asst_id: int,
     eot_id: int,
+    include_eot_in_loss: bool = False,
 ) -> list[bool]:
     """
     Build an assistant-only loss mask matching the ids length.
@@ -102,7 +103,10 @@ def sft_loss_mask_for_ids(
             continue
 
         if in_assistant_span:
-            mask.append(True)
+            if include_eot_in_loss or token_id != eot_id:
+                mask.append(True)
+            else:
+                mask.append(False)
             if token_id == eot_id:
                 in_assistant_span = False
             continue
@@ -187,6 +191,7 @@ def pack_sft_ids_and_mask(
     asst_id: int,
     eot_id: int,
     pad_id: int,
+    include_eot_in_loss: bool = False,
 ) -> tuple[list[int], list[bool]]:
     """
     Truncate/pad to length S while preserving the last assistant turn when
@@ -247,6 +252,7 @@ def pack_sft_ids_and_mask(
         usr_id=usr_id,
         asst_id=asst_id,
         eot_id=eot_id,
+        include_eot_in_loss=include_eot_in_loss,
     )
 
     # pad with pad_id (mask False) if too short

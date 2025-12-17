@@ -20,15 +20,15 @@ class ModelConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     seed: int = 42
-    B: int = 32
+    B: int = 16
     total_steps_smoke: int = 1000
-    total_steps: int = 20000
+    total_steps: int = 17000
     eval_every: int = 200
-    eval_steps: int = 100
+    eval_steps: int = 50
     log_every: int = 50
     ckpt_every: int = 1000
     base_lr: float = 3e-4
-    warmup_steps: int = 200
+    warmup_steps: int = 340
     min_lr: float = 3e-5
     grad_clip: float = 1.0
     accum_steps: int = 1
@@ -36,6 +36,18 @@ class TrainConfig:
     amp: bool = True
     amp_dtype: str = "fp16"
     activation_checkpointing: bool = False
+    optimizer: str = "adamw"
+    beta1: float = 0.9
+    beta2: float = 0.95
+    weight_decay: float = 0.1
+    eps: float = 1e-8
+    micro_B_eval: int | None = None
+    eval_batches: int | None = None
+    decay_norm_and_bias: bool = True
+    decay_embeddings: bool = True
+    save_best: bool = True
+    best_metric: str | None = None
+    best_metric_weights: dict[str, float] | None = None
 
 
 def default_p_train() -> dict[str, float]:

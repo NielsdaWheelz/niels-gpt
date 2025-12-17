@@ -100,7 +100,7 @@ def test_mask_marks_only_assistant_tokens():
         + [False]  # user <|eot|>
         + [False]  # <|asst|>
         + [True] * len(asst_content)
-        + [True]  # assistant <|eot|>
+        + [False]  # assistant <|eot|> excluded from loss
     )
 
     assert mask == expected_mask

@@ -12,17 +12,42 @@ from niels_gpt.config import ModelConfig
 from niels_gpt.device import get_device
 from niels_gpt.generate import generate_text
 from niels_gpt.model.gpt import GPT
+from niels_gpt.settings import default_settings
+from niels_gpt.tokenizer import get_default_tokenizer
 
 
 DEFAULT_SYSTEM_PROMPT = "you are a surly chatbot for niels' site. answer in third person about niels. be terse, rude but not offensive, grudging, laconic, and brooding. answer like you resent being asked. do not guess. say 'i don't know' when unsure. refuse private info with 'no'."
 
 
 def main():
+    settings = default_settings()
+    gen_defaults = settings.generation
     parser = argparse.ArgumentParser(description="Interactive chat CLI")
     parser.add_argument("--ckpt", type=str, required=True, help="Path to checkpoint file")
-    parser.add_argument("--max-new-tokens", type=int, default=256, help="Maximum new tokens to generate")
-    parser.add_argument("--temperature", type=float, default=0.9, help="Sampling temperature")
-    parser.add_argument("--top-k", type=int, default=50, help="Top-k filtering (0 for none)")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=gen_defaults.max_new_tokens,
+        help="Maximum new tokens to generate",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=gen_defaults.temperature,
+        help="Sampling temperature",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=gen_defaults.top_k if gen_defaults.top_k is not None else 0,
+        help="Top-k filtering (0 for none)",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=gen_defaults.top_p if gen_defaults.top_p is not None else 0.0,
+        help="Top-p filtering (0 disables)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for generation")
     parser.add_argument("--system", type=str, default=None, help="System message content")
     parser.add_argument(
@@ -47,6 +72,7 @@ def main():
 
     # Handle top-k (0 means None)
     top_k = args.top_k if args.top_k > 0 else None
+    top_p = args.top_p if args.top_p > 0 else None
 
     # Load checkpoint and model
     device = get_device()
@@ -62,6 +88,13 @@ def main():
     # MPS has inconsistent generator support, so we always use CPU generator
     generator = torch.Generator(device="cpu")
     generator.manual_seed(args.seed)
+
+    tok = get_default_tokenizer()
+    special_ids = tok.special_token_ids()
+    stop_id = gen_defaults.stop_token_id or special_ids["eot"]
+    banned_ids = gen_defaults.banned_token_ids
+    if not banned_ids and settings.sft_format.ban_role_tokens_during_generation:
+        banned_ids = [special_ids["sys"], special_ids["usr"], special_ids["asst"]]
 
     # Initialize messages with system prompt
     messages = [{"role": "system", "content": system_prompt}]
@@ -98,6 +131,10 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature,
                 top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=gen_defaults.repetition_penalty,
+                stop_token_id=stop_id,
+                banned_token_ids=banned_ids,
                 device=device,
                 generator=generator,
             )

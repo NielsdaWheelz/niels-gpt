@@ -20,6 +20,12 @@ from typing import Any
 
 import torch
 
+from niels_gpt.settings import default_settings
+
+
+_SETTINGS = default_settings()
+_BENCH = _SETTINGS.benchmark
+
 
 def get_device(device_arg: str) -> str:
     """Resolve device string."""
@@ -169,8 +175,8 @@ def run_sweep(args: argparse.Namespace) -> None:
         with open(args.grid, "r") as f:
             grid = json.load(f)
 
-    # Vocabulary size (use a reasonable default)
-    V = 50257  # GPT-2 vocab size
+    # Vocabulary size (use settings default)
+    V = _SETTINGS.model.V
 
     all_results = []
     best_configs = []
@@ -231,7 +237,7 @@ def run_sweep(args: argparse.Namespace) -> None:
             "steps_warmup": args.steps_warmup,
             "steps_measure": args.steps_measure,
             "seed": args.seed,
-            "lr": 3e-4,
+            "lr": _BENCH.lr,
         }
         result = run_trial_subprocess(max_B_trial, args.timeout_s)
         all_results.append(result)
@@ -247,7 +253,7 @@ def run_sweep(args: argparse.Namespace) -> None:
                 "steps_warmup": args.steps_warmup,
                 "steps_measure": args.steps_measure,
                 "seed": args.seed,
-                "lr": 3e-4,
+            "lr": _BENCH.lr,
             }
             result = run_trial_subprocess(half_B_trial, args.timeout_s)
             all_results.append(result)
@@ -328,11 +334,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run benchmark sweep")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "mps", "cpu"], help="Device to use")
     parser.add_argument("--out_dir", type=str, default="bench/", help="Output directory")
-    parser.add_argument("--timeout_s", type=float, default=20.0, help="Timeout per trial in seconds")
-    parser.add_argument("--steps_warmup", type=int, default=2, help="Warmup steps per trial")
-    parser.add_argument("--steps_measure", type=int, default=10, help="Measured steps per trial")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--max_micro_B", type=int, default=256, help="Maximum micro_B to try")
+    parser.add_argument("--timeout_s", type=float, default=_BENCH.timeout_s, help="Timeout per trial in seconds")
+    parser.add_argument("--steps_warmup", type=int, default=_BENCH.steps_warmup, help="Warmup steps per trial")
+    parser.add_argument("--steps_measure", type=int, default=_BENCH.steps_measure, help="Measured steps per trial")
+    parser.add_argument("--seed", type=int, default=_BENCH.seed, help="Random seed")
+    parser.add_argument("--max_micro_B", type=int, default=_BENCH.max_micro_B, help="Maximum micro_B to try")
     parser.add_argument("--grid", type=str, default="preset", help="Grid config: 'preset' or path to JSON")
 
     args = parser.parse_args()
