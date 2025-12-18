@@ -1,10 +1,15 @@
 """Text generation utilities with temperature and top-k sampling."""
 
+from typing import TYPE_CHECKING
+
 import torch
 
 from niels_gpt.config import ModelConfig
 from niels_gpt.settings import GenerationSettings
 from niels_gpt.tokenizer import get_default_tokenizer
+
+if TYPE_CHECKING:
+    from niels_gpt.model.gpt import GPT
 
 
 def top_k_filter(logits: torch.Tensor, k: int) -> torch.Tensor:
@@ -227,3 +232,256 @@ def generate_text(
     )
 
     return tok.decode(output_ids)
+
+
+@torch.no_grad()
+def generate_ids_greedy_full(
+    model: "GPT",
+    prompt_ids: list[int],
+    *,
+    max_new_tokens: int,
+    eot_token_id: int,
+) -> list[int]:
+    """
+    Generate tokens greedily using full forward passes (baseline for testing).
+
+    This function recomputes the full forward pass for each new token. It enforces
+    the same hard cap as the cached version for equivalence testing.
+
+    Args:
+        model: GPT model.
+        prompt_ids: List of prompt token IDs.
+        max_new_tokens: Maximum number of tokens to generate.
+        eot_token_id: Token ID that ends generation.
+
+    Returns:
+        List of token IDs (prompt + generated, including eot if generated).
+
+    Raises:
+        ValueError: If prompt + max_new_tokens exceeds T_max.
+    """
+    model.eval()
+
+    T_max = model.cfg.T
+    device = next(model.parameters()).device
+
+    # Hard cap enforcement (same as cached version)
+    if len(prompt_ids) + max_new_tokens > T_max:
+        raise ValueError(
+            f"prompt length {len(prompt_ids)} + max_new_tokens {max_new_tokens} "
+            f"= {len(prompt_ids) + max_new_tokens} exceeds T_max {T_max}"
+        )
+
+    ids_list = list(prompt_ids)
+
+    for _ in range(max_new_tokens):
+        # Check hard cap before generating
+        if len(ids_list) >= T_max:
+            raise ValueError(f"exceeded T_max={T_max} during generation")
+
+        # Convert to tensor (NO CROPPING - use full sequence for equivalence testing)
+        ids_tensor = torch.tensor(ids_list, dtype=torch.long, device=device)
+
+        # Add batch dimension
+        ids_batch = ids_tensor.unsqueeze(0)  # (1, t)
+
+        # Forward pass on full sequence
+        logits = model(ids_batch)  # (1, t, V)
+
+        # Take last position, greedy decode
+        next_token = int(logits[0, -1].argmax().item())
+
+        # Append
+        ids_list.append(next_token)
+
+        # Stop on eot (include eot in output)
+        if next_token == eot_token_id:
+            return ids_list
+
+    return ids_list
+
+
+@torch.no_grad()
+def generate_ids_greedy_cached(
+    model: "GPT",
+    prompt_ids: list[int],
+    *,
+    max_new_tokens: int,
+    eot_token_id: int,
+) -> list[int]:
+    """
+    Generate tokens greedily using KV-cache (efficient version).
+
+    Args:
+        model: GPT model.
+        prompt_ids: List of prompt token IDs.
+        max_new_tokens: Maximum number of tokens to generate.
+        eot_token_id: Token ID that ends generation.
+
+    Returns:
+        List of token IDs (prompt + generated, including eot if generated).
+
+    Raises:
+        ValueError: If prompt + max_new_tokens exceeds T_max.
+    """
+    from niels_gpt.infer.kv_cache import allocate_kv_cache, decode_step, prefill
+
+    model.eval()
+
+    T_max = model.cfg.T
+    device = next(model.parameters()).device
+    dtype = torch.float32  # Use fp32 for inference (Option A from spec)
+
+    # Hard cap enforcement at function entry
+    if len(prompt_ids) + max_new_tokens > T_max:
+        raise ValueError(
+            f"prompt length {len(prompt_ids)} + max_new_tokens {max_new_tokens} "
+            f"= {len(prompt_ids) + max_new_tokens} exceeds T_max {T_max}"
+        )
+
+    # Allocate cache
+    L = len(model.blocks)
+    H = model.cfg.H
+    D = model.cfg.C // model.cfg.H
+    cache = allocate_kv_cache(L=L, B=1, H=H, T_max=T_max, D=D, device=device, dtype=dtype)
+
+    # Prefill with prompt
+    prompt_tensor = torch.tensor(prompt_ids, dtype=torch.long, device=device).unsqueeze(0)  # (1, t0)
+    _, cache, _ = prefill(model, prompt_tensor, cache)
+
+    # Start with prompt
+    ids_list = list(prompt_ids)
+
+    # Decode loop
+    for _ in range(max_new_tokens):
+        # Check hard cap before decode_step
+        if cache.t >= T_max:
+            raise ValueError(f"exceeded T_max={T_max} during generation")
+
+        # Decode one step
+        last_token = torch.tensor([[ids_list[-1]]], dtype=torch.long, device=device)  # (1, 1)
+        logits, cache, _ = decode_step(model, last_token, cache)
+
+        # Greedy decode
+        next_token = int(logits[0, 0].argmax().item())
+
+        # Append
+        ids_list.append(next_token)
+
+        # Stop on eot (include eot in output)
+        if next_token == eot_token_id:
+            return ids_list
+
+    return ids_list
+
+
+@torch.no_grad()
+def generate_ids_cached(
+    model: "GPT",
+    prompt_ids: list[int],
+    *,
+    max_new_tokens: int,
+    eot_token_id: int,
+    temperature: float = 0.9,
+    top_k: int | None = 50,
+    trace_layer: int | None = None,
+) -> dict:
+    """
+    Generate tokens using KV-cache with sampling and optional tracing.
+
+    Args:
+        model: GPT model.
+        prompt_ids: List of prompt token IDs.
+        max_new_tokens: Maximum number of tokens to generate.
+        eot_token_id: Token ID that ends generation.
+        temperature: Sampling temperature (0 = greedy).
+        top_k: Top-k filtering (None = no filtering).
+        trace_layer: Optional layer index to trace attention.
+
+    Returns:
+        Dict with:
+            - "ids": list[int] full sequence (prompt + generated, including eot if generated)
+            - "steps": list[dict] each step contains:
+                - "token_id": int
+                - "attn_row": list[list[float]] (if trace_layer is set)
+
+    Raises:
+        ValueError: If prompt + max_new_tokens exceeds T_max.
+    """
+    from niels_gpt.infer.kv_cache import allocate_kv_cache, decode_step, prefill
+
+    model.eval()
+
+    T_max = model.cfg.T
+    device = next(model.parameters()).device
+    dtype = torch.float32  # Use fp32 for inference
+
+    # Hard cap enforcement at function entry
+    if len(prompt_ids) + max_new_tokens > T_max:
+        raise ValueError(
+            f"prompt length {len(prompt_ids)} + max_new_tokens {max_new_tokens} "
+            f"= {len(prompt_ids) + max_new_tokens} exceeds T_max {T_max}"
+        )
+
+    # Allocate cache
+    L = len(model.blocks)
+    H = model.cfg.H
+    D = model.cfg.C // model.cfg.H
+    cache = allocate_kv_cache(L=L, B=1, H=H, T_max=T_max, D=D, device=device, dtype=dtype)
+
+    # Prefill with prompt
+    prompt_tensor = torch.tensor(prompt_ids, dtype=torch.long, device=device).unsqueeze(0)
+    _, cache, _ = prefill(
+        model, prompt_tensor, cache, trace_layer=trace_layer, return_attn_row=False
+    )
+
+    # Start with prompt
+    ids_list = list(prompt_ids)
+    steps = []
+
+    # CPU generator for sampling
+    generator = torch.Generator(device="cpu")
+
+    # Decode loop
+    for _ in range(max_new_tokens):
+        # Check hard cap before decode_step
+        if cache.t >= T_max:
+            raise ValueError(f"exceeded T_max={T_max} during generation")
+
+        # Decode one step
+        last_token = torch.tensor([[ids_list[-1]]], dtype=torch.long, device=device)
+        logits, cache, trace = decode_step(
+            model,
+            last_token,
+            cache,
+            trace_layer=trace_layer,
+            return_attn_row=(trace_layer is not None),
+        )
+
+        # Sample next token
+        logits_1d = logits[0, 0]  # (V,)
+        next_token = sample_next_token(
+            logits_1d,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=None,
+            generator=generator,
+        )
+
+        # Build step info
+        step_info = {"token_id": next_token}
+        if trace is not None and trace.get("attn_row") is not None:
+            attn_row = trace["attn_row"]  # (B, H, t)
+            # Convert to list[list[float]]
+            step_info["attn_row"] = attn_row[0].cpu().tolist()  # (H, t) -> list[list]
+
+        steps.append(step_info)
+
+        # Append
+        ids_list.append(next_token)
+
+        # Stop on eot (include eot in output)
+        if next_token == eot_token_id:
+            return {"ids": ids_list, "steps": steps}
+
+    return {"ids": ids_list, "steps": steps}
