@@ -108,7 +108,8 @@ pytest -q tests/test_bench_trial_smoke.py tests/test_bench_sweep_smoke.py
 
 **rebuild caches**
 ```bash
-# Build all pretrain and SFT caches (dolly, oasst1)
+# Build all pretrain and SFT caches (dolly, oasst1, primer; PR-04)
+# Requires data/primer.jsonl to exist; validates default caches at end
 python -m niels_gpt.cache.cli build-all \
   --cache-dir data/cache \
   --seed 42 \
@@ -117,7 +118,7 @@ python -m niels_gpt.cache.cli build-all \
   --shard-bytes 134217728 \
   --roam-dir data/.roam-data
 
-# Build primer SFT cache separately (PR-03)
+# Build primer SFT cache separately (optional; build-all now includes it per PR-04)
 python -m niels_gpt.cache.cli build-sft-primer \
   --primer-jsonl data/primer.jsonl \
   --out-dir data/cache/sft \
@@ -216,7 +217,8 @@ pip install -e ".[dev]"
 
 1) Build caches (pretrain + SFT):
 ```bash
-# Build all pretrain and default SFT sources (dolly, oasst1)
+# Build all pretrain and default SFT sources (dolly, oasst1, primer; PR-04)
+# Requires data/primer.jsonl; validates default mix caches at end
 python -m niels_gpt.cache.cli build-all \
   --cache-dir data/cache \
   --seed 42 \
@@ -225,7 +227,7 @@ python -m niels_gpt.cache.cli build-all \
   --shard-bytes 134217728 \
   --roam-dir data/.roam-data
 
-# Build primer SFT cache (PR-03)
+# Build primer SFT cache (optional; build-all now includes it per PR-04)
 python -m niels_gpt.cache.cli build-sft-primer \
   --primer-jsonl data/primer.jsonl \
   --out-dir data/cache/sft \
@@ -233,7 +235,7 @@ python -m niels_gpt.cache.cli build-sft-primer \
   --val-frac 0.1 \
   --t-max 1024
 ```
-Notes: downloads HF datasets (needs network); writes streams under `cache/streams` and sft under `cache/sft`. `--roam-dir` optional; set to a real directory to include roam notes. Primer SFT requires a valid `primer.jsonl` file with chat messages.
+Notes: downloads HF datasets (needs network); writes streams under `cache/streams` and sft under `cache/sft`. `--roam-dir` optional; set to a real directory to include roam notes. As of PR-04, `build-all` includes primer SFT and validates that caches for all default mix sources exist at the end; requires `data/primer.jsonl`.
 
 2) Train tokenizer (if rebuilding):
 ```bash
