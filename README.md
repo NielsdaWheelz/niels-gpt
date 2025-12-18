@@ -369,6 +369,14 @@ flowchart TD
 ### generation (`niels_gpt.generate`)
 - `generate_ids(model, prompt_ids, *, max_new_tokens, T, temperature, top_k, top_p, repetition_penalty, eot_id, banned_token_ids, device, generator)`: autoregressive sampling with explicit hyperparams; stops when `eot_id` is produced; uses CPU generator for deterministic sampling across devices.
 - `generate_text(model, prompt_text, *, cfg, generation: GenerationSettings, stop_token_id, banned_token_ids, device, generator)`: convenience wrapper around encode/generate_ids/decode driven by resolved generation settings.
+- **KV-cache inference** (`niels_gpt.infer.kv_cache`): efficient autoregressive generation using cached key-value pairs to avoid recomputing attention for previous tokens.
+  - `generate_ids_cached(model, prompt_ids, *, max_new_tokens, eot_token_id, temperature, top_k, trace_layer)`: KV-cache generation with sampling and optional attention tracing. Returns dict with "ids" (including eot if generated) and "steps" (per-token info with optional attention traces).
+  - `generate_ids_greedy_cached(model, prompt_ids, *, max_new_tokens, eot_token_id)`: greedy (argmax) decoding with KV-cache. Returns list of token IDs including eot if generated.
+  - `generate_ids_greedy_full(model, prompt_ids, *, max_new_tokens, eot_token_id)`: baseline greedy decoding without cache (for testing equivalence). No cropping - uses full sequence for exact equivalence. Returns list of token IDs including eot if generated.
+  - `prefill(model, prompt_ids, cache, *, trace_layer, return_attn_row)`: process full prompt and fill KV cache in one forward pass.
+  - `decode_step(model, last_token_ids, cache, *, trace_layer, return_attn_row)`: process single token and append to cache.
+  - KV-cache stores post-RoPE keys and values for all layers; hard cap at T_max enforced with early error; supports attention row tracing for visualization.
+  - **EOT behavior**: all generation functions include the eot token in the returned ids list (better for debugging/reproducibility). Client code (like chat CLI) should strip eot when rendering text.
 
 ### chat CLI (`niels_gpt.chat_cli`)
 - loads checkpoint, rebuilds model, seeds CPU generator, builds chat prompt with system/user turns, calls `generate_text` with stop sequences to avoid emitting role tags, extracts assistant reply, loops.

@@ -150,3 +150,6 @@ build/*
 
 # Benchmark artifacts
 bench/*
+
+# Run artifacts
+runs/*
