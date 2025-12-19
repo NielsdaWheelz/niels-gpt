@@ -9,7 +9,7 @@
       "ckpt_every": 2,
       "log_every": 1,
       "amp": false,
-      "amp_dtype": "fp16",
+      "amp_dtype": "fp32",
       "activation_checkpointing": false
     }
   }

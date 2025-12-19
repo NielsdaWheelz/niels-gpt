@@ -22,7 +22,7 @@
       "grad_clip": 1.0,
       "accum_steps": 2,
       "amp": false,
-      "amp_dtype": "fp16",
+      "amp_dtype": "fp32",
       "activation_checkpointing": false
     }
   }

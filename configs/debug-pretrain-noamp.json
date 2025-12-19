@@ -1,7 +1,7 @@
 {
   "model": {
     "V": 16000,
-    "T": 256,
+    "T": 512,
     "C": 384,
     "L": 8,
     "H": 6,
@@ -9,16 +9,15 @@
   },
   "training": {
     "pretrain": {
-      "micro_B": 8,
-      "accum_steps": 4,
-      "total_steps": 9000,
+      "micro_B": 16,
+      "accum_steps": 2,
+      "total_steps": 1000,
       "eval_every": 200,
       "ckpt_every": 500,
       "amp": false,
-      "amp_dtype": "fp32",
       "activation_checkpointing": false,
       "base_lr": 0.0003,
-      "warmup_steps": 380,
+      "warmup_steps": 100,
       "min_lr": 0.00003,
       "grad_clip": 1.0
     }

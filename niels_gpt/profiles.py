@@ -68,15 +68,15 @@ PROFILES: dict[str, ProfileMetadata] = {
         name="prod",
         path=paths.CONFIG_DIR / "prod-pretrain.json",
         phase="pretrain",
-        description="Production pretrain (full model: V=50257, T=512, C=384, L=8, H=6)",
-        notes="GPT-2 vocab size, 8-layer model. Requires GPU. 10K+ steps.",
+        description="Production pretrain (V=16000, T=512, C=384, L=8, H=6, micro_B=16)",
+        notes="Optimized for M4 Air. 19K steps, ~14.5h. 3792 tok/s throughput.",
     ),
     "prod-sft": ProfileMetadata(
         name="prod-sft",
         path=paths.CONFIG_DIR / "prod-sft.json",
         phase="sft",
-        description="Production SFT (10K steps, full model)",
-        notes="Use after prod pretrain. Requires GPU.",
+        description="Production SFT (2.1K steps, ~0.8h)",
+        notes="Use after prod pretrain. 90/10 pretrain/sft split.",
     ),
     # Minimal/baseline profiles
     "minimal": ProfileMetadata(
@@ -99,14 +99,36 @@ PROFILES: dict[str, ProfileMetadata] = {
         path=paths.CONFIG_DIR / "pipeline-dev.json",
         phase="pipeline",
         description="Development pipeline (pretrain → SFT with small models)",
-        notes="Runs full two-phase training with dev-sized models.",
+        notes="Runs full two-phase training with dev-sized models. 90/10 pretrain/sft split (20K/2.2K steps).",
     ),
     "pipeline-prod": ProfileMetadata(
         name="pipeline-prod",
         path=paths.CONFIG_DIR / "pipeline-prod.json",
         phase="pipeline",
-        description="Production pipeline (pretrain → SFT with full models)",
-        notes="Full two-phase training. Requires GPU and significant time.",
+        description="Production pipeline (pretrain → SFT, optimized for M4 Air)",
+        notes="Full two-phase training. 90/10 split (19K/2.1K steps). ~15.3h total on M4 Air.",
+    ),
+    # Experiment profiles - hyperparameter comparison
+    "exp-t512-nocp": ProfileMetadata(
+        name="exp-t512-nocp",
+        path=paths.CONFIG_DIR / "exp-t512-nocp.json",
+        phase="pretrain",
+        description="Experiment: T=512, no checkpointing (200 steps, micro_B=16)",
+        notes="For comparing loss/throughput. 3792 tok/s on M4 Air.",
+    ),
+    "exp-t512-cp": ProfileMetadata(
+        name="exp-t512-cp",
+        path=paths.CONFIG_DIR / "exp-t512-cp.json",
+        phase="pretrain",
+        description="Experiment: T=512, with checkpointing (200 steps, micro_B=12)",
+        notes="For comparing loss/throughput. 3034 tok/s on M4 Air.",
+    ),
+    "exp-t1024-nocp": ProfileMetadata(
+        name="exp-t1024-nocp",
+        path=paths.CONFIG_DIR / "exp-t1024-nocp.json",
+        phase="pretrain",
+        description="Experiment: T=1024, no checkpointing (200 steps, micro_B=3)",
+        notes="For comparing loss/throughput. 3088 tok/s on M4 Air.",
     ),
 }
 
@@ -165,13 +187,14 @@ def format_profile_list(phase: PhaseType | None = None) -> str:
     lines = ["Available profiles:"]
     lines.append("")
 
-    # Group by category (smoke, dev, prod, minimal, pipeline)
+    # Group by category (smoke, dev, prod, minimal, pipeline, experiments)
     categories = {
         "Smoke Tests": [p for p in profiles if p.name.startswith("smoke")],
         "Development": [p for p in profiles if p.name.startswith("dev") or p.name == "dev"],
         "Production": [p for p in profiles if p.name.startswith("prod")],
         "Minimal/Baseline": [p for p in profiles if p.name.startswith("minimal")],
         "Pipelines": [p for p in profiles if p.name.startswith("pipeline")],
+        "Experiments": [p for p in profiles if p.name.startswith("exp-")],
     }
 
     for category, cat_profiles in categories.items():

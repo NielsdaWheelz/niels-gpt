@@ -319,7 +319,8 @@ def run_sft(
     cache_dir = job.cache_dir
     streams_cache_dir = job.streams_cache_dir
 
-    validate_token_caches(cache_dir, source_probs.keys(), splits=("train", "val"))
+    # Note: validate_token_caches expects pretrain structure (split subdirs).
+    # SFT uses flat files with split prefixes, validated by _load_sft_sources below.
     print(format_data_plan("sft", cache_dir, source_probs.keys(), splits=("train", "val")))
 
     sft_train = _load_sft_sources(
@@ -442,15 +443,48 @@ def run_sft(
 
         for _ in range(train_cfg.accum_steps):
             x, y_masked = mixture.get_batch(B=train_cfg.B, generator=train_gen)
+
+            # Sanity checks every 50 steps
+            if step % 50 == 0:
+                assert x.min() >= 0, f"step {step}: x.min()={x.min()} < 0"
+                assert x.max() < model_cfg.V, f"step {step}: x.max()={x.max()} >= V={model_cfg.V}"
+
             with amp_ctx:
                 logits = model(x)
+
+                # Check logits are finite and log max_abs_logit
+                if step % 50 == 0:
+                    max_abs_logit = logits.abs().max().item()
+                    assert torch.isfinite(logits).all(), f"step {step}: non-finite logits detected"
+                    print(f"[diagnostic] step {step}: max_abs_logit={max_abs_logit:.4f}")
+
                 loss = F.cross_entropy(
                     logits.view(-1, logits.size(-1)),
                     y_masked.view(-1),
                     ignore_index=-100,
                 )
+
+                # Check loss is finite
+                if step % 50 == 0:
+                    assert torch.isfinite(loss), f"step {step}: non-finite loss={loss.item()}"
+
             (loss / train_cfg.accum_steps).backward()
             loss_accum += loss.item()
+
+            # Check gradients are finite every 50 steps and log max_abs_grad
+            if step % 50 == 0:
+                max_grad_stats = []
+                for name, param in model.named_parameters():
+                    if param.grad is not None:
+                        if not torch.isfinite(param.grad).all():
+                            grad_stats = f"min={param.grad.min():.4f}, max={param.grad.max():.4f}, mean={param.grad.mean():.4f}"
+                            raise AssertionError(f"step {step}: non-finite gradients in {name}: {grad_stats}")
+                        # Track max_abs_grad for a few key params
+                        if any(k in name for k in ["tok_emb", "attn.c_attn", "mlp.c_fc"]):
+                            max_abs = param.grad.abs().max().item()
+                            max_grad_stats.append(f"{name}={max_abs:.4f}")
+                if max_grad_stats:
+                    print(f"[diagnostic] step {step}: max_abs_grad: {', '.join(max_grad_stats[:3])}")
 
         nn_utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
         optimizer.step()
@@ -478,6 +512,8 @@ def run_sft(
                 wikitext_val_source=wikitext_val_source,
                 val_mixture=val_mixture,
             )
+            # Confirm model is back in training mode after eval
+            assert model.training, f"step {step_num}: model not in training mode after eval!"
 
             val_sft_loss_str = f"{last_val_sft_loss:.4f}" if last_val_sft_loss is not None else "None"
             print(

@@ -156,10 +156,23 @@ def main():
             else:
                 # Use KV-cache generation (default, faster)
                 prompt_ids = tok.encode(prompt)
+
+                # Automatically cap max_new_tokens to fit within T_max
+                T_max = cfg.T
+                remaining_tokens = T_max - len(prompt_ids)
+                if remaining_tokens <= 0:
+                    print(f"Error: prompt length {len(prompt_ids)} exceeds model capacity {T_max}")
+                    messages.pop()  # Remove the user message we just added
+                    continue
+
+                effective_max_new_tokens = min(generation_cfg.max_new_tokens, remaining_tokens)
+                if effective_max_new_tokens < generation_cfg.max_new_tokens:
+                    print(f"Warning: capping max_new_tokens from {generation_cfg.max_new_tokens} to {effective_max_new_tokens} (prompt: {len(prompt_ids)}/{T_max} tokens)")
+
                 result = generate_ids_cached(
                     model,
                     prompt_ids,
-                    max_new_tokens=generation_cfg.max_new_tokens,
+                    max_new_tokens=effective_max_new_tokens,
                     eot_token_id=stop_id,
                     temperature=generation_cfg.temperature,
                     top_k=generation_cfg.top_k,

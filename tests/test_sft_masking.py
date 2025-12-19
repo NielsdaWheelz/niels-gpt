@@ -68,3 +68,4 @@ def test_sft_masking():
         expected_labels = np.array(labels[1:], dtype=np.int64)
         np.testing.assert_array_equal(y_masked[0].cpu().numpy(), expected_labels)
 
+

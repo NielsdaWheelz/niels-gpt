@@ -81,7 +81,7 @@ class TokenizerSettings(BaseModel):
     normalization: Literal["none", "nfkc"] = "nfkc"
     byte_fallback: bool = True
     special_tokens: SpecialTokens = SpecialTokens()
-    tokenizer_sha256: str | None = "a7ccda70ba310e6571295e6833dd6c340a906c5506cb1391ca0aeb7aba20c762"
+    tokenizer_sha256: str | None = None  # validated against cache meta.json at load time
     expected_special_token_ids: dict[str, int] | None = {"sys": 3, "usr": 4, "asst": 5, "eot": 6}
 
     @model_validator(mode="after")
@@ -313,7 +313,7 @@ class TrainPhaseSettings(BaseModel):
 
     grad_clip: float = 1.0
     amp: bool = False
-    amp_dtype: Literal["fp16", "bf16"] = "fp16"
+    amp_dtype: Literal["fp16", "bf16", "fp32"] = "fp32"
     activation_checkpointing: bool = False
 
     save_best: bool = True
@@ -337,9 +337,9 @@ def _default_pretrain_train() -> TrainPhaseSettings:
 
 def _default_sft_train() -> TrainPhaseSettings:
     return TrainPhaseSettings(
-        total_steps=6000,
+        total_steps=1889,  # 90/10 split: pretrain default is 17000, so sft = 17000/9
         base_lr=1e-4,
-        warmup_steps=120,
+        warmup_steps=189,
         min_lr=1e-5,
         weight_decay=0.05,
         best_metric="sft_val_loss",

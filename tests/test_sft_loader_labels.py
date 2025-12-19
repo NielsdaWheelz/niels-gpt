@@ -68,3 +68,4 @@ def test_sft_loader_uses_cached_labels():
         assert (y_masked[0] != -100).any(), "labels should include assistant targets"
         assert (y_masked[0][: len(expected_shifted) - 1] == -100).sum() > 0, "non-assistant tokens must stay masked"
 
+
