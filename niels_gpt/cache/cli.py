@@ -45,9 +45,9 @@ def _ensure_tokenizer(cache_dir: Path):
     tokenizer_cache_dir.mkdir(parents=True, exist_ok=True)
     cached_model = tokenizer_cache_dir / "spm.model"
     cached_meta = tokenizer_cache_dir / "tokenizer_meta.json"
-    if not cached_model.exists():
-        shutil.copy2(tokenizer_model_path, cached_model)
-    if tokenizer_meta_path.exists() and not cached_meta.exists():
+    # Always copy tokenizer to cache (ensures cache uses current tokenizer)
+    shutil.copy2(tokenizer_model_path, cached_model)
+    if tokenizer_meta_path.exists():
         shutil.copy2(tokenizer_meta_path, cached_meta)
 
     expected_ids = None

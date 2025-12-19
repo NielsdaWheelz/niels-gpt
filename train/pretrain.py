@@ -368,6 +368,17 @@ def run_pretrain(
     validate_token_caches(cache_dir, source_probs.keys(), splits=("train", "val"))
     print(format_data_plan("pretrain", cache_dir, source_probs.keys(), splits=("train", "val")))
 
+    # Diagnostic: print cache metadata for first source
+    first_source = next(iter(source_probs.keys()))
+    meta_path = cache_dir / first_source / "meta.json"
+    if meta_path.exists():
+        meta = _load_meta(meta_path)
+        print(f"[diagnostic] cache metadata for '{first_source}':")
+        print(f"  token_dtype: {meta.get('token_dtype', 'N/A')}")
+        print(f"  tokenizer_sha256: {meta.get('tokenizer_sha256', 'N/A')}")
+        print(f"  special_token_ids: {meta.get('special_token_ids', 'N/A')}")
+        print(f"  model vocab size (V): {model_cfg.V}")
+
     train_sources = _load_sources(
         cache_dir,
         source_probs.keys(),
@@ -376,6 +387,14 @@ def run_pretrain(
         expected_tokenizer_sha=job.tokenizer_sha256,
         expected_special_token_ids=job.special_token_ids,
     )
+
+    # Diagnostic: sample and check token ranges
+    print("[diagnostic] sampling token ranges from each train source:")
+    train_gen_diag = torch.Generator(device="cpu").manual_seed(train_cfg.seed)
+    for src_name, src in train_sources.items():
+        x_sample, y_sample = src.sample(device="cpu", generator=train_gen_diag)
+        print(f"  {src_name}: x range [{x_sample.min()}, {x_sample.max()}], y range [{y_sample.min()}, {y_sample.max()}]")
+
     val_sources = _load_sources(
         cache_dir,
         [val_source_name],
@@ -463,11 +482,46 @@ def run_pretrain(
 
         for _ in range(train_cfg.accum_steps):
             x, y = mixture.get_batch(B=train_cfg.B, device=device, generator=train_gen)
+
+            # Sanity checks every 50 steps
+            if step % 50 == 0:
+                assert x.min() >= 0, f"step {step}: x.min()={x.min()} < 0"
+                assert x.max() < model_cfg.V, f"step {step}: x.max()={x.max()} >= V={model_cfg.V}"
+                assert y.min() >= 0, f"step {step}: y.min()={y.min()} < 0"
+                assert y.max() < model_cfg.V, f"step {step}: y.max()={y.max()} >= V={model_cfg.V}"
+
             with amp_ctx:
                 logits = model(x)
+
+                # Check logits are finite and log max_abs_logit
+                if step % 50 == 0:
+                    max_abs_logit = logits.abs().max().item()
+                    assert torch.isfinite(logits).all(), f"step {step}: non-finite logits detected"
+                    print(f"[diagnostic] step {step}: max_abs_logit={max_abs_logit:.4f}")
+
                 loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1))
+
+                # Check loss is finite
+                if step % 50 == 0:
+                    assert torch.isfinite(loss), f"step {step}: non-finite loss={loss.item()}"
+
             (loss / train_cfg.accum_steps).backward()
             loss_accum += loss.item()
+
+            # Check gradients are finite every 50 steps and log max_abs_grad
+            if step % 50 == 0:
+                max_grad_stats = []
+                for name, param in model.named_parameters():
+                    if param.grad is not None:
+                        if not torch.isfinite(param.grad).all():
+                            grad_stats = f"min={param.grad.min():.4f}, max={param.grad.max():.4f}, mean={param.grad.mean():.4f}"
+                            raise AssertionError(f"step {step}: non-finite gradients in {name}: {grad_stats}")
+                        # Track max_abs_grad for a few key params
+                        if any(k in name for k in ["tok_emb", "attn.c_attn", "mlp.c_fc"]):
+                            max_abs = param.grad.abs().max().item()
+                            max_grad_stats.append(f"{name}={max_abs:.4f}")
+                if max_grad_stats:
+                    print(f"[diagnostic] step {step}: max_abs_grad: {', '.join(max_grad_stats[:3])}")
 
         nn_utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
         optimizer.step()
@@ -500,6 +554,8 @@ def run_pretrain(
             last_val_loss = evaluate_pretrain(
                 model, batch_fn=val_batch_fn, eval_batches=eval_batches
             )
+            # Confirm model is back in training mode after eval
+            assert model.training, f"step {step_num}: model not in training mode after eval!"
             print(f"[pretrain] val_{val_source_name}_loss {last_val_loss:.4f}")
             if train_cfg.save_best and (best_val_loss is None or last_val_loss < best_val_loss):
                 best_val_loss = last_val_loss

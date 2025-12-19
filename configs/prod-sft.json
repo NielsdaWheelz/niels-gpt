@@ -1,7 +1,7 @@
 {
   "model": {
-    "V": 50257,
-    "T": 512,
+    "V": 16000,
+    "T": 256,
     "C": 384,
     "L": 8,
     "H": 6,
@@ -9,15 +9,15 @@
   },
   "training": {
     "sft": {
-      "micro_B": 8,
-      "total_steps": 10000,
-      "eval_every": 500,
-      "ckpt_every": 1000,
+      "micro_B": 4,
+      "total_steps": 1000,
+      "eval_every": 250,
+      "ckpt_every": 500,
       "base_lr": 0.0001,
-      "warmup_steps": 200,
+      "warmup_steps": 211,
       "min_lr": 0.00001,
-      "amp": true,
-      "amp_dtype": "fp16",
+      "amp": false,
+      "amp_dtype": "fp32",
       "activation_checkpointing": false
     }
   },
